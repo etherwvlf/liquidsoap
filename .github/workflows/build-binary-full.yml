@@ -1,0 +1,74 @@
+name: Build Liquidsoap Full
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Clean Workspace
+      run: |
+        rm -f dune-project dune
+
+    - name: Install System Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y git make gcc g++ jq opam
+
+    - name: Setup OCaml Environment
+      run: |
+        export OPAMJOBS=$(nproc)
+        opam init --disable-sandboxing --bare --auto-setup
+        opam switch create 4.14.2
+        eval $(opam env)
+        opam install dune
+
+    - name: Fetch Liquidsoap Source
+      run: |
+        LIQUIDSOAP_VERSION=$(curl -s -H "Authorization: Bearer ${{ github.token }}" \
+          https://api.github.com/repos/savonet/liquidsoap-release-assets/releases/latest | \
+          jq -r .tag_name | sed 's/^v//')
+        
+        wget "https://github.com/savonet/liquidsoap-release-assets/releases/download/v${LIQUIDSOAP_VERSION}/liquidsoap-${LIQUIDSOAP_VERSION}.tar.gz" -O liquidsoap.tar.gz
+        mkdir liquidsoap-src
+        tar -xzf liquidsoap.tar.gz -C liquidsoap-src --strip-components 1
+
+    - name: Build Liquidsoap
+      run: |
+        cd liquidsoap-src
+        
+        # Pin and install dependencies
+        opam pin --no-action --yes .
+        opam install --deps-only --confirm-level=unsafe-yes liquidsoap-lang liquidsoap
+        opam install --confirm-level=unsafe-yes \
+          posix-time2 pulseaudio inotify mad samplerate \
+          faad opus vorbis flac ffmpeg
+
+        # Build
+        eval $(opam env)
+        export IS_SNAPSHOT=false
+        export LIQUIDSOAP_BUILD_TARGET=posix
+        dune build --release
+        dune install --relocatable --prefix output --docdir="$PWD/.omit" --libdir="$PWD/.omit"
+
+        # Prepare artifacts
+        mv output/share/liquidsoap-lang output/share/liquidsoap
+        cp -r "$(opam var share)/camomile" output/share/liquidsoap
+
+        # Create flat ZIP directly
+        cd output
+        zip -r ../liquidsoap-binary-full.zip .
+        cd ..
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: liquidsoap-binary-full
+        path: liquidsoap-src/liquidsoap-binary-full.zip
