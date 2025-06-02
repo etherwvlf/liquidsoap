@@ -1,0 +1,40 @@
+name: Autosync with upstream
+
+on:
+  schedule:
+    - cron: '0 0 1,16 * *'  # Runs on the 1st and 16th of every month
+  workflow_dispatch:         # Allow manual runs
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0     # Fetch full history for rebase
+
+      - name: Add Upstream
+        run: |
+          git remote add upstream https://github.com/savonet/liquidsoap.git
+          git fetch upstream
+
+      - name: Rebase onto Upstream while preserving autosync
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          git checkout main
+          
+          # Preserve our autosync workflow before rebase
+          git checkout HEAD -- .github/workflows/upstream-autosync.yml
+          
+          # Rebase onto upstream
+          git rebase upstream/main
+          
+          # Restore our autosync workflow after rebase
+          git checkout HEAD -- .github/workflows/upstream-autosync.yml
+          git add .github/workflows/upstream-autosync.yml
+          git commit -m "Preserve fork-specific autosync workflow" || true
+
+      - name: Force Push
+        run: git push origin main --force
